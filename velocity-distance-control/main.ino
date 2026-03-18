@@ -1,155 +1,166 @@
 #include <math.h>
 
-// ---------------- PIN MAP ----------------
-#define R_EN 6
-#define R_IN1 7
-#define R_IN2 8
+// ================= PIN CONFIGURATION =================
+#define RIGHT_PWM   6
+#define RIGHT_IN1   7
+#define RIGHT_IN2   8
 
-#define L_EN 11
-#define L_IN1 12
-#define L_IN2 13
+#define LEFT_PWM    11
+#define LEFT_IN1    12
+#define LEFT_IN2    13
 
-#define L_ENC_A 14
-#define L_ENC_B 15
-#define R_ENC_A 16
-#define R_ENC_B 17
+#define LEFT_ENC_A  14
+#define LEFT_ENC_B  15
+#define RIGHT_ENC_A 16
+#define RIGHT_ENC_B 17
 
-// ---------------- ROBOT PARAMETERS ----------------
-const float WHEEL_DIAMETER = 0.069;
-const float CPR = 208.0;
+// ================= ROBOT PARAMETERS =================
+const float WHEEL_DIAMETER = 0.069f;
+const float CPR = 208.0f;
 
-const float DT = 0.02;
+const float DT = 0.02f;  // control loop period (20 ms)
 
-const float TARGET_DISTANCE = 2.0;   // meters
-const float TARGET_RPM = 140.0;      // adjust for speed
+// ================= TASK PARAMETERS =================
+const float TARGET_DISTANCE = 2.0f;   // meters to travel
+const float TARGET_RPM      = 140.0f; // desired wheel speed
 
-// ---------------- CONTROLLERS ----------------
-float Kp_speed = 2.0;
-float Ki_speed = 5.0;
+// ================= CONTROLLER GAINS =================
+float Kp_speed = 2.0f;
+float Ki_speed = 5.0f;
 
-float K_straight = 0.02;  // straight correction gain
+float K_straight = 0.02f;  // correction gain for straight motion
 
-float intL = 0;
-float intR = 0;
+// ================= CONTROLLER STATE =================
+float integralLeftRPM  = 0.0f;
+float integralRightRPM = 0.0f;
 
-// ---------------- ENCODERS ----------------
-volatile long leftCount  = 0;
-volatile long rightCount = 0;
+// ================= ENCODER STATE =================
+volatile long encoderLeftCount  = 0;
+volatile long encoderRightCount = 0;
 
-void leftISR(){
-  if(digitalRead(L_ENC_B)) leftCount++;
-  else leftCount--;
+// ================= ENCODER INTERRUPTS =================
+void leftEncoderISR(){
+  if(digitalRead(LEFT_ENC_B)) encoderLeftCount++;
+  else encoderLeftCount--;
 }
 
-void rightISR(){
-  if(digitalRead(R_ENC_B)) rightCount++;
-  else rightCount--;
+void rightEncoderISR(){
+  if(digitalRead(RIGHT_ENC_B)) encoderRightCount++;
+  else encoderRightCount--;
 }
 
-void setMotorPWM(int pwmL, int pwmR){
-  pwmL = constrain(pwmL,0,255);
-  pwmR = constrain(pwmR,0,255);
+// ================= MOTOR CONTROL =================
+void setMotorPWM(int pwmLeft, int pwmRight){
+  pwmLeft  = constrain(pwmLeft,  0, 255);
+  pwmRight = constrain(pwmRight, 0, 255);
 
-  analogWrite(L_EN,pwmL);
-  analogWrite(R_EN,pwmR);
+  analogWrite(LEFT_PWM,  pwmLeft);
+  analogWrite(RIGHT_PWM, pwmRight);
 }
 
+// ================= SETUP =================
 void setup(){
 
   Serial.begin(115200);
 
-  pinMode(R_EN,OUTPUT);
-  pinMode(R_IN1,OUTPUT);
-  pinMode(R_IN2,OUTPUT);
+  // Motor pins
+  pinMode(RIGHT_PWM, OUTPUT);
+  pinMode(RIGHT_IN1, OUTPUT);
+  pinMode(RIGHT_IN2, OUTPUT);
 
-  pinMode(L_EN,OUTPUT);
-  pinMode(L_IN1,OUTPUT);
-  pinMode(L_IN2,OUTPUT);
+  pinMode(LEFT_PWM, OUTPUT);
+  pinMode(LEFT_IN1, OUTPUT);
+  pinMode(LEFT_IN2, OUTPUT);
 
-  pinMode(L_ENC_A,INPUT_PULLUP);
-  pinMode(L_ENC_B,INPUT_PULLUP);
-  pinMode(R_ENC_A,INPUT_PULLUP);
-  pinMode(R_ENC_B,INPUT_PULLUP);
+  // Encoder pins
+  pinMode(LEFT_ENC_A, INPUT_PULLUP);
+  pinMode(LEFT_ENC_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_B, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(L_ENC_A), leftISR, RISING);
-  attachInterrupt(digitalPinToInterrupt(R_ENC_A), rightISR, RISING);
+  // Attach interrupts for encoder A channels
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_A), leftEncoderISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_A), rightEncoderISR, RISING);
 
-  digitalWrite(R_IN1,HIGH);
-  digitalWrite(R_IN2,LOW);
+  // Set forward direction
+  digitalWrite(RIGHT_IN1, HIGH);
+  digitalWrite(RIGHT_IN2, LOW);
+  digitalWrite(LEFT_IN1, HIGH);
+  digitalWrite(LEFT_IN2, LOW);
 
-  digitalWrite(L_IN1,HIGH);
-  digitalWrite(L_IN2,LOW);
-
-  setMotorPWM(0,0);
+  setMotorPWM(0, 0);
 }
 
+// ================= MAIN LOOP =================
 void loop(){
 
-  static unsigned long last=0;
-  if(millis()-last < DT*1000) return;
-  last=millis();
+  static unsigned long lastTime = 0;
+  if(millis() - lastTime < DT * 1000) return;
+  lastTime = millis();
 
-  // ---------- encoder delta ----------
-  static long prevL=0, prevR=0;
+  // ===== ENCODER DELTA =====
+  static long prevLeftCount = 0, prevRightCount = 0;
 
-  long curL = leftCount;
-  long curR = rightCount;
+  long currLeftCount  = encoderLeftCount;
+  long currRightCount = encoderRightCount;
 
-  long dL = curL - prevL;
-  long dR = curR - prevR;
+  long deltaLeft  = currLeftCount  - prevLeftCount;
+  long deltaRight = currRightCount - prevRightCount;
 
-  prevL = curL;
-  prevR = curR;
+  prevLeftCount  = currLeftCount;
+  prevRightCount = currRightCount;
 
-  // ---------- RPM calculation ----------
-  float rpmL = (dL * 60.0) / (CPR * DT);
-  float rpmR = (dR * 60.0) / (CPR * DT);
+  // ===== RPM ESTIMATION =====
+  float rpmLeft  = (deltaLeft  * 60.0f) / (CPR * DT);
+  float rpmRight = (deltaRight * 60.0f) / (CPR * DT);
 
-  // ---------- distance ----------
-  float distL = (curL / CPR) * (PI * WHEEL_DIAMETER);
-  float distR = (curR / CPR) * (PI * WHEEL_DIAMETER);
+  // ===== DISTANCE ESTIMATION =====
+  float distLeft  = (currLeftCount  / CPR) * (PI * WHEEL_DIAMETER);
+  float distRight = (currRightCount / CPR) * (PI * WHEEL_DIAMETER);
 
-  float distance = (distL + distR) * 0.5;
+  float traveledDistance = (distLeft + distRight) * 0.5f;
 
-  if(distance >= TARGET_DISTANCE){
-
-    setMotorPWM(0,0);
+  // Stop condition
+  if(traveledDistance >= TARGET_DISTANCE){
+    setMotorPWM(0, 0);
     Serial.println("DONE");
     return;
   }
 
-  // ---------- SPEED PI ----------
-  float errR = TARGET_RPM - rpmR;
-  float errL = TARGET_RPM - rpmL;
+  // ===== SPEED PI CONTROL =====
+  float errorRightRPM = TARGET_RPM - rpmRight;
+  float errorLeftRPM  = TARGET_RPM - rpmLeft;
 
-  intR += errR * DT;
-  intL += errL * DT;
+  integralRightRPM += errorRightRPM * DT;
+  integralLeftRPM  += errorLeftRPM  * DT;
 
-  intR = constrain(intR,-30,30);
-  intL = constrain(intL,-30,30);
+  integralRightRPM = constrain(integralRightRPM, -30.0f, 30.0f);
+  integralLeftRPM  = constrain(integralLeftRPM,  -30.0f, 30.0f);
 
-  int pwmR = 70 + (int)(Kp_speed*errR + Ki_speed*intR);
-  int pwmL = 70 + (int)(Kp_speed*errL + Ki_speed*intL);
+  int pwmRight = 70 + (int)(Kp_speed * errorRightRPM + Ki_speed * integralRightRPM);
+  int pwmLeft  = 70 + (int)(Kp_speed * errorLeftRPM  + Ki_speed * integralLeftRPM);
 
-  // ---------- STRAIGHT CORRECTION ----------
-  long straightError = curL - curR;
+  // ===== STRAIGHT LINE CORRECTION =====
+  // Use encoder difference to correct drift
+  long encoderError = currLeftCount - currRightCount;
 
-  pwmL -= K_straight * straightError;
-  pwmR += K_straight * straightError;
+  pwmLeft  -= K_straight * encoderError;
+  pwmRight += K_straight * encoderError;
 
-  pwmL = constrain(pwmL,0,255);
-  pwmR = constrain(pwmR,0,255);
+  pwmLeft  = constrain(pwmLeft,  0, 255);
+  pwmRight = constrain(pwmRight, 0, 255);
 
-  setMotorPWM(pwmL,pwmR);
+  setMotorPWM(pwmLeft, pwmRight);
 
+  // ===== DEBUG OUTPUT =====
   Serial.print("dist=");
-  Serial.print(distance);
+  Serial.print(traveledDistance);
   Serial.print(" rpmL=");
-  Serial.print(rpmL);
+  Serial.print(rpmLeft);
   Serial.print(" rpmR=");
-  Serial.print(rpmR);
+  Serial.print(rpmRight);
   Serial.print(" pwmL=");
-  Serial.print(pwmL);
+  Serial.print(pwmLeft);
   Serial.print(" pwmR=");
-  Serial.println(pwmR);
+  Serial.println(pwmRight);
 }
