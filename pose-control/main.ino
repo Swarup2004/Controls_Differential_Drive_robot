@@ -1,262 +1,295 @@
 #include <math.h>
 
-// ---------------- PIN MAP ----------------
-#define R_EN 6
-#define R_IN1 7
-#define R_IN2 8
+// ================= PIN CONFIGURATION =================
+#define RIGHT_PWM   6
+#define RIGHT_IN1   7
+#define RIGHT_IN2   8
 
-#define L_EN 11
-#define L_IN1 12
-#define L_IN2 13
+#define LEFT_PWM    11
+#define LEFT_IN1    12
+#define LEFT_IN2    13
 
-#define L_ENC_A 14
-#define L_ENC_B 15
-#define R_ENC_A 16
-#define R_ENC_B 17
+#define LEFT_ENC_A  14
+#define LEFT_ENC_B  15
+#define RIGHT_ENC_A 16
+#define RIGHT_ENC_B 17
 
-// ---------------- ROBOT PARAMETERS ----------------
-const float WHEEL_DIAMETER = 0.069;
-const float WHEEL_RADIUS   = WHEEL_DIAMETER / 2.0;
-const float WHEEL_BASE     = 0.202;
+// ================= ROBOT PARAMETERS =================
+const float WHEEL_DIAMETER = 0.069f;
+const float WHEEL_RADIUS   = WHEEL_DIAMETER / 2.0f;
+const float WHEEL_BASE     = 0.202f;
 
-const float CPR = 208.0;
+const float CPR = 208.0f;
 
-// control loop for pose update + control
-const float DT = 0.02; // 20 ms
+// Control loop timing
+const float DT = 0.02f; // 20 ms
 
-// rpm measurement window (bigger = smoother)
-const float RPM_DT = 0.10; // 100 ms
-const int   RPM_STEPS = (int)(RPM_DT / DT + 0.5f);
+// RPM smoothing window
+const float RPM_WINDOW = 0.10f;
+const int   RPM_STEPS  = (int)(RPM_WINDOW / DT + 0.5f);
 
-// ---------------- GOAL ----------------
-float x_goal = 1;
-float y_goal = 0.22;   // <-- DO NOT write 0.-3
-float theta_goal = 0; // desired final heading (rad)
+// ================= GOAL =================
+float goalX = 1.0f;
+float goalY = 0.22f;
+float goalTheta = 0.0f; //Theta = 0 means, The robot is heading towards its initial direction after achieving the GOAL X,Y.
 
-// ---------------- NAVIGATION GAINS ----------------
-float K_rho = 0.7;
+// ================= NAVIGATION GAINS =================
+float Kp_rho = 0.7f;
 
-// ---------------- HEADING PID (for alpha and for final rotate) ----------------
-float Kp_heading = 1.3;
-float Ki_heading = 0.0;
-float Kd_heading = 0.15;
+// ================= HEADING PID =================
+float Kp_heading = 1.3f;
+float Ki_heading = 0.0f;
+float Kd_heading = 0.15f;
 
-float headingIntegral = 0;
-float prevErrHeading = 0;
+float headingIntegral = 0.0f;
+float prevHeadingError = 0.0f;
 
-// ---------------- SPEED PI ----------------
-float Kp_speed = 2.0;
-float Ki_speed = 5.0;
+// ================= SPEED PI =================
+float Kp_speed = 2.0f;
+float Ki_speed = 5.0f;
 
-float intL = 0;
-float intR = 0;
+float integralLeftRPM  = 0.0f;
+float integralRightRPM = 0.0f;
 
-// ---------------- STATE ----------------
-volatile long leftCount  = 0;
-volatile long rightCount = 0;
+// ================= STATE =================
+volatile long encoderLeftCount  = 0;
+volatile long encoderRightCount = 0;
 
-float x = 0;
-float y = 0;
-float theta = 0;
+float posX = 0.0f;
+float posY = 0.0f;
+float theta = 0.0f;
 
-// ---------------- MODE ----------------
-enum Mode { GO_TO_POINT, TURN_TO_HEADING, DONE };
-Mode mode = GO_TO_POINT;
+// ================= MODE =================
+enum Mode { MOVE_TO_POINT, ALIGN_HEADING, COMPLETE };
+Mode currentMode = MOVE_TO_POINT;
 
-// ---------------- ENCODER ISR ----------------
-void leftISR(){
-  if(digitalRead(L_ENC_B)) leftCount++;
-  else leftCount--;
-}
-void rightISR(){
-  if(digitalRead(R_ENC_B)) rightCount++;
-  else rightCount--;
+// ================= ENCODER INTERRUPTS =================
+void leftEncoderISR(){
+  if(digitalRead(LEFT_ENC_B)) encoderLeftCount++;
+  else encoderLeftCount--;
 }
 
-// wrap angle to [-pi, pi]
-float wrapPi(float a){
-  while(a > PI)  a -= 2*PI;
-  while(a < -PI) a += 2*PI;
-  return a;
+void rightEncoderISR(){
+  if(digitalRead(RIGHT_ENC_B)) encoderRightCount++;
+  else encoderRightCount--;
 }
 
-void setMotorPWM(int pwmL, int pwmR){
-  pwmL = constrain(pwmL, 0, 255);
-  pwmR = constrain(pwmR, 0, 255);
-  analogWrite(L_EN, pwmL);
-  analogWrite(R_EN, pwmR);
+// ================= UTILITY FUNCTIONS =================
+
+// Wrap angle to [-π, π]
+float wrapAngle(float angle){
+  while(angle > PI)  angle -= 2*PI;
+  while(angle < -PI) angle += 2*PI;
+  return angle;
 }
 
+// Apply PWM to motors
+void setMotorPWM(int pwmLeft, int pwmRight){
+  pwmLeft  = constrain(pwmLeft,  0, 255);
+  pwmRight = constrain(pwmRight, 0, 255);
+
+  analogWrite(LEFT_PWM,  pwmLeft);
+  analogWrite(RIGHT_PWM, pwmRight);
+}
+
+// ================= SETUP =================
 void setup(){
+
   Serial.begin(115200);
 
-  pinMode(R_EN,OUTPUT);
-  pinMode(R_IN1,OUTPUT);
-  pinMode(R_IN2,OUTPUT);
+  // Motor pins
+  pinMode(RIGHT_PWM, OUTPUT);
+  pinMode(RIGHT_IN1, OUTPUT);
+  pinMode(RIGHT_IN2, OUTPUT);
 
-  pinMode(L_EN,OUTPUT);
-  pinMode(L_IN1,OUTPUT);
-  pinMode(L_IN2,OUTPUT);
+  pinMode(LEFT_PWM, OUTPUT);
+  pinMode(LEFT_IN1, OUTPUT);
+  pinMode(LEFT_IN2, OUTPUT);
 
-  pinMode(L_ENC_A,INPUT_PULLUP);
-  pinMode(L_ENC_B,INPUT_PULLUP);
-  pinMode(R_ENC_A,INPUT_PULLUP);
-  pinMode(R_ENC_B,INPUT_PULLUP);
+  // Encoder pins
+  pinMode(LEFT_ENC_A, INPUT_PULLUP);
+  pinMode(LEFT_ENC_B, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_A, INPUT_PULLUP);
+  pinMode(RIGHT_ENC_B, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(L_ENC_A), leftISR, RISING);
-  attachInterrupt(digitalPinToInterrupt(R_ENC_A), rightISR, RISING);
+  // Interrupts
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_A), leftEncoderISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_A), rightEncoderISR, RISING);
 
-  // forward direction
-  digitalWrite(R_IN1,HIGH);
-  digitalWrite(R_IN2,LOW);
-  digitalWrite(L_IN1,HIGH);
-  digitalWrite(L_IN2,LOW);
+  // Set forward direction
+  digitalWrite(RIGHT_IN1, HIGH);
+  digitalWrite(RIGHT_IN2, LOW);
+  digitalWrite(LEFT_IN1, HIGH);
+  digitalWrite(LEFT_IN2, LOW);
 
-  setMotorPWM(0,0);
+  setMotorPWM(0, 0);
 }
 
+// ================= MAIN LOOP =================
 void loop(){
-  static unsigned long last=0;
-  if(millis()-last < (unsigned long)(DT*1000)) return;
-  last=millis();
 
-  // encoder delta (20ms)
-  static long prevL=0, prevR=0;
-  long curL = leftCount;
-  long curR = rightCount;
-  long dL = curL - prevL;
-  long dR = curR - prevR;
-  prevL = curL;
-  prevR = curR;
+  static unsigned long lastTime = 0;
+  if(millis() - lastTime < (unsigned long)(DT * 1000)) return;
+  lastTime = millis();
 
-  // pose update (odometry)
-  float distL = (dL/CPR) * (PI*WHEEL_DIAMETER);
-  float distR = (dR/CPR) * (PI*WHEEL_DIAMETER);
+  // ===== ENCODER DELTA =====
+  static long prevLeftCount = 0, prevRightCount = 0;
 
-  float ds     = (distL + distR) * 0.5f;
-  float dtheta = (distR - distL) / WHEEL_BASE;
+  long currLeftCount  = encoderLeftCount;
+  long currRightCount = encoderRightCount;
 
-  theta = wrapPi(theta + dtheta);
-  x += ds * cos(theta);
-  y += ds * sin(theta);
+  long deltaLeft  = currLeftCount  - prevLeftCount;
+  long deltaRight = currRightCount - prevRightCount;
 
-  // ---------- RPM measurement over 100 ms ----------
-  static int stepCount = 0;
-  static long sumDL = 0, sumDR = 0;
-  static float rpmL = 0, rpmR = 0;
+  prevLeftCount  = currLeftCount;
+  prevRightCount = currRightCount;
 
-  sumDL += dL;
-  sumDR += dR;
-  stepCount++;
+  // ===== ODOMETRY UPDATE =====
+  float distLeft  = (deltaLeft  / CPR) * (PI * WHEEL_DIAMETER);
+  float distRight = (deltaRight / CPR) * (PI * WHEEL_DIAMETER);
 
-  if(stepCount >= RPM_STEPS){
-    float windowT = stepCount * DT;
-    rpmL = (sumDL * 60.0f) / (CPR * windowT);
-    rpmR = (sumDR * 60.0f) / (CPR * windowT);
-    sumDL = 0;
-    sumDR = 0;
-    stepCount = 0;
+  float ds     = (distLeft + distRight) * 0.5f;
+  float dTheta = (distRight - distLeft) / WHEEL_BASE;
+
+  theta = wrapAngle(theta + dTheta);
+  posX += ds * cos(theta);
+  posY += ds * sin(theta);
+
+  // ===== RPM ESTIMATION =====
+  static int stepCounter = 0;
+  static long sumLeftCounts = 0, sumRightCounts = 0;
+  static float rpmLeft = 0, rpmRight = 0;
+
+  sumLeftCounts  += deltaLeft;
+  sumRightCounts += deltaRight;
+  stepCounter++;
+
+  if(stepCounter >= RPM_STEPS){
+    float windowTime = stepCounter * DT;
+
+    rpmLeft  = (sumLeftCounts  * 60.0f) / (CPR * windowTime);
+    rpmRight = (sumRightCounts * 60.0f) / (CPR * windowTime);
+
+    sumLeftCounts = 0;
+    sumRightCounts = 0;
+    stepCounter = 0;
   }
 
-  // ---------- MODE LOGIC ----------
-  float v = 0.0f; // forward m/s
-  float w = 0.0f; // yaw rad/s
+  // ===== CONTROL VARIABLES =====
+  float v = 0.0f; // linear velocity
+  float w = 0.0f; // angular velocity
 
-  // distance to goal
-  float dx = x_goal - x;
-  float dy = y_goal - y;
+  // Distance to goal
+  float dx = goalX - posX;
+  float dy = goalY - posY;
   float rho = sqrt(dx*dx + dy*dy);
 
-  if(mode == GO_TO_POINT){
-    // heading to goal
-    float theta_target = atan2(dy, dx);
-    float alpha = wrapPi(theta_target - theta);
+  // ===== CONTROL LOGIC =====
+  if(currentMode == MOVE_TO_POINT){
+
+    float targetHeading = atan2(dy, dx);
+    float headingError = wrapAngle(targetHeading - theta);
 
     if(rho < 0.05f){
-      // switch to turn-in-place at the goal
-      mode = TURN_TO_HEADING;
+      currentMode = ALIGN_HEADING;
+
       headingIntegral = 0;
-      prevErrHeading = 0;
-      intL = intR = 0;
-    } else {
-      // forward speed
-      v = K_rho * rho * cos(alpha);
+      prevHeadingError = 0;
+      integralLeftRPM = integralRightRPM = 0;
+    }
+    else{
+      v = Kp_rho * rho * cos(headingError);
       v = constrain(v, -0.18f, 0.18f);
 
-      // heading PID on alpha
-      headingIntegral += alpha * DT;
+      // Heading PID
+      headingIntegral += headingError * DT;
       headingIntegral = constrain(headingIntegral, -2.0f, 2.0f);
-      float dErr = (alpha - prevErrHeading) / DT;
-      w = Kp_heading*alpha + Ki_heading*headingIntegral + Kd_heading*dErr;
-      prevErrHeading = alpha;
+
+      float dError = (headingError - prevHeadingError) / DT;
+
+      w = Kp_heading * headingError +
+          Ki_heading * headingIntegral +
+          Kd_heading * dError;
+
+      prevHeadingError = headingError;
 
       w = constrain(w, -2.0f, 2.0f);
     }
   }
-  else if(mode == TURN_TO_HEADING){
-    // stop forward, rotate to theta_goal
-    float err = wrapPi(theta_goal - theta);
 
-    if(fabs(err) < 0.05f){
-      mode = DONE;
+  else if(currentMode == ALIGN_HEADING){
+
+    float headingError = wrapAngle(goalTheta - theta);
+
+    if(fabs(headingError) < 0.05f){
+      currentMode = COMPLETE;
       setMotorPWM(0,0);
-    } else {
+    }
+    else{
       v = 0.0f;
-      headingIntegral += err * DT;
+
+      headingIntegral += headingError * DT;
       headingIntegral = constrain(headingIntegral, -2.0f, 2.0f);
-      float dErr = (err - prevErrHeading) / DT;
-      w = Kp_heading*err + Ki_heading*headingIntegral + Kd_heading*dErr;
-      prevErrHeading = err;
+
+      float dError = (headingError - prevHeadingError) / DT;
+
+      w = Kp_heading * headingError +
+          Ki_heading * headingIntegral +
+          Kd_heading * dError;
+
+      prevHeadingError = headingError;
 
       w = constrain(w, -2.0f, 2.0f);
     }
   }
-  else { // DONE
+
+  else{
     setMotorPWM(0,0);
   }
 
-  // wheel linear velocities
-  float vR = v + (w*WHEEL_BASE*0.5f);
-  float vL = v - (w*WHEEL_BASE*0.5f);
+  // ===== CONVERT (v, w) → WHEEL VELOCITIES =====
+  float velRight = v + (w * WHEEL_BASE * 0.5f);
+  float velLeft  = v - (w * WHEEL_BASE * 0.5f);
 
-  // rpm references
-  float rpmRefR = (vR/WHEEL_RADIUS)*(60.0f/(2.0f*PI));
-  float rpmRefL = (vL/WHEEL_RADIUS)*(60.0f/(2.0f*PI));
+  // Convert to RPM
+  float rpmRefRight = (velRight / WHEEL_RADIUS) * (60.0f / (2.0f * PI));
+  float rpmRefLeft  = (velLeft  / WHEEL_RADIUS) * (60.0f / (2.0f * PI));
 
-  // PI speed control
-  float errR = rpmRefR - rpmR;
-  float errL = rpmRefL - rpmL;
+  // ===== PI SPEED CONTROL =====
+  float errorRightRPM = rpmRefRight - rpmRight;
+  float errorLeftRPM  = rpmRefLeft  - rpmLeft;
 
-  intR += errR * DT;
-  intL += errL * DT;
-  intR = constrain(intR, -30.0f, 30.0f);
-  intL = constrain(intL, -30.0f, 30.0f);
+  integralRightRPM += errorRightRPM * DT;
+  integralLeftRPM  += errorLeftRPM  * DT;
 
-  int pwmR = 70 + (int)(Kp_speed*errR + Ki_speed*intR);
-  int pwmL = 70 + (int)(Kp_speed*errL + Ki_speed*intL);
+  integralRightRPM = constrain(integralRightRPM, -30.0f, 30.0f);
+  integralLeftRPM  = constrain(integralLeftRPM,  -30.0f, 30.0f);
 
-  // if done, force 0
-  if(mode == DONE){
-    pwmL = 0; pwmR = 0;
+  int pwmRight = 70 + (int)(Kp_speed * errorRightRPM + Ki_speed * integralRightRPM);
+  int pwmLeft  = 70 + (int)(Kp_speed * errorLeftRPM  + Ki_speed * integralLeftRPM);
+
+  if(currentMode == COMPLETE){
+    pwmLeft = 0;
+    pwmRight = 0;
   }
 
-  setMotorPWM(pwmL, pwmR);
+  setMotorPWM(pwmLeft, pwmRight);
 
-  // debug
+  // ===== DEBUG OUTPUT =====
   Serial.print("mode=");
-  Serial.print((int)mode);
+  Serial.print((int)currentMode);
   Serial.print(" x=");
-  Serial.print(x, 2);
+  Serial.print(posX, 2);
   Serial.print(" y=");
-  Serial.print(y, 2);
+  Serial.print(posY, 2);
   Serial.print(" theta=");
   Serial.print(theta, 2);
   Serial.print(" rpmL=");
-  Serial.print(rpmL, 2);
+  Serial.print(rpmLeft, 2);
   Serial.print(" rpmR=");
-  Serial.print(rpmR, 2);
+  Serial.print(rpmRight, 2);
   Serial.print(" pwmL=");
-  Serial.print(pwmL);
+  Serial.print(pwmLeft);
   Serial.print(" pwmR=");
-  Serial.println(pwmR);
+  Serial.println(pwmRight);
 }
