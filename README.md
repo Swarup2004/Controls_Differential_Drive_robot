@@ -7,7 +7,16 @@ This repository implements two control strategies:
 2. Velocity-controlled straight-line motion with distance termination  
 
 ---
+## System Overview
 
+<p align="center">
+  <img src="TOP_VIEW.JPG" width="500"/>
+</p>
+
+This is a differential drive robot platform equipped with:
+- Two DC motors with quadrature encoders  
+- Motor driver for independent wheel control  
+- Microcontroller for real-time control and feedback  
 ## Features
 
 - Encoder-based closed-loop control  
