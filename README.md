@@ -89,15 +89,53 @@ Common GND REQUIRED
 #### Objective
 Drive the robot to a target position (x, y) and align to a desired final heading θ.
 
-#### Control Pipeline
+#### System Diagram
+
 ```
-Encoders → Odometry → (x, y, θ)
-          ↓
-   Navigation Controller
-          ↓
-      (v, ω)
-          ↓
- Wheel Velocities → RPM → PI → PWM
+        +----------------------+
+        |   Goal (x, y, θ)     |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |  Navigation Control  |
+        |   (PID on heading)   |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |   (v, ω) Generator   |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |  Wheel Kinematics    |
+        |  (v → vL, vR)        |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |   PI Speed Control   |
+        |  (RPM tracking)      |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |       Motors         |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |      Encoders        |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |      Odometry        |
+        |   (x, y, θ update)   |
+        +----------------------+
+                   |
+                   +---- feedback loop ----+
 ```
 
 #### Key Elements
@@ -115,15 +153,44 @@ Encoders → Odometry → (x, y, θ)
 #### Objective
 Maintain a target velocity while moving in a straight line and stop after a specified distance.
 
-#### Control Pipeline
+#### System Diagram
+
 ```
-Encoders → RPM Estimation
-          ↓
-     PI Speed Control
-          ↓
- Straight-Line Correction
-          ↓
-         PWM
+        +----------------------+
+        |   Target RPM + Dist  |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |   PI Speed Control   |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |   Straight Correction|
+        | (Encoder difference) |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |        Motors        |
+        +----------+-----------+
+                   |
+                   v
+        +----------------------+
+        |       Encoders       |
+        +----------+-----------+
+                   |
+        +----------+-----------+
+        |                      |
+        v                      v
++------------------+   +----------------------+
+|  RPM Estimation  |   | Distance Estimation  |
++------------------+   +----------------------+
+        |                      |
+        +----------+-----------+
+                   |
+            Stop Condition
 ```
 
 #### Key Elements
