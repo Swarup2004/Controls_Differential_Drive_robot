@@ -10,7 +10,7 @@ This repository implements two control strategies:
 ## System Overview
 
 <p align="center">
-  <img src="TOP_VIEW.JPG" width="500"/>
+  <img src="TOP_VIEW.jpg" width="500"/>
 </p>
 
 This is a differential drive robot platform equipped with:
