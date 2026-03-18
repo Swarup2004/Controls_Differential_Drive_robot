@@ -1,39 +1,41 @@
 # Differential Drive Robot Control
 
 Closed-loop control of a differential drive robot using quadrature encoders.  
-Implements two control strategies:
-1. Position + Heading (θ) control using odometry and PID  
-2. ADAS-style distance control using velocity PI and straight-line correction  
+This repository implements two control strategies:
+
+1. Pose-based navigation using odometry and heading PID  
+2. Velocity-controlled straight-line motion with distance termination  
 
 ---
 
-## 🚀 Features
+## Features
 
 - Encoder-based closed-loop control  
 - Differential drive kinematics  
 - Odometry-based pose estimation (x, y, θ)  
 - PID heading control  
 - PI velocity control  
-- Straight-line error correction  
+- Straight-line drift correction  
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```
 .
-├── position_perf_theta/
-│   └── position_perf_theta.ino
+├── pose-control/
+│   └── main.ino
 │
-├── vel_theta_control/
-│   └── vel_theta_control.ino
+├── velocity-distance-control/
+│   └── main.ino
 │
-└── README.md
+├── README.md
+└── LICENSE
 ```
 
 ---
 
-## 🔌 Hardware Setup
+## Hardware Setup
 
 ### Components
 - Microcontroller (Arduino / STM32 / Pico)
@@ -44,7 +46,7 @@ Implements two control strategies:
 
 ---
 
-## 📌 Pin Configuration
+## Pin Configuration
 
 ```
 ================ MOTOR DRIVER =================
@@ -78,16 +80,14 @@ Common GND REQUIRED
 
 ---
 
-## ⚙️ Control Modes
+## Control Modes
 
----
+### 1. Pose Control
 
-### 1. Position + Theta Control
-
-**File:** `position_perf_theta/position_perf_theta.ino`
+**File:** `pose-control/main.ino`
 
 #### Objective
-Drive robot to a target position (x, y) and align to desired heading θ.
+Drive the robot to a target position (x, y) and align to a desired final heading θ.
 
 #### Control Pipeline
 ```
@@ -100,14 +100,20 @@ Encoders → Odometry → (x, y, θ)
  Wheel Velocities → RPM → PI → PWM
 ```
 
+#### Key Elements
+- Differential drive odometry  
+- Heading error regulation using PID  
+- Velocity command generation (v, ω)  
+- Wheel-level PI speed control  
+
 ---
 
-### 2. ADAS Distance Control
+### 2. Velocity-Distance Control
 
-**File:** `vel_theta_control/vel_theta_control.ino`
+**File:** `velocity-distance-control/main.ino`
 
 #### Objective
-Move forward a fixed distance with constant velocity and maintain straight path.
+Maintain a target velocity while moving in a straight line and stop after a specified distance.
 
 #### Control Pipeline
 ```
@@ -115,14 +121,20 @@ Encoders → RPM Estimation
           ↓
      PI Speed Control
           ↓
- Straight Error Correction
+ Straight-Line Correction
           ↓
          PWM
 ```
 
+#### Key Elements
+- Constant RPM tracking using PI control  
+- Distance estimation using encoder counts  
+- Drift correction using left-right encoder difference  
+- Termination based on traveled distance  
+
 ---
 
-## 🧠 Kinematics Model
+## Kinematics Model
 
 ```
 v = (vR + vL) / 2
@@ -136,7 +148,7 @@ vL = v - (ω * WHEEL_BASE / 2)
 
 ---
 
-## 📏 Odometry Update
+## Odometry Update
 
 ```
 ds     = (dR + dL) / 2
@@ -149,7 +161,7 @@ y += ds * sin(θ)
 
 ---
 
-## ⚙️ Tuning Parameters
+## Tuning Parameters
 
 ### Speed Control
 - Kp_speed  
@@ -165,40 +177,40 @@ y += ds * sin(θ)
 
 ---
 
-## 🧪 How to Run
+## How to Run
 
-1. Upload desired `.ino` file  
-2. Connect hardware as per pin configuration  
+1. Upload the desired `main.ino` file from the selected control mode  
+2. Connect hardware as per the pin configuration  
 3. Open Serial Monitor (115200 baud)  
-4. Observe RPM, PWM, distance or pose  
+4. Observe runtime data (RPM, PWM, pose or distance)  
 
 ---
 
-## ⚠️ Notes
+## Notes
 
-- Ensure correct interrupt pins for your board  
-- Wrong CPR → incorrect distance estimation  
-- Poor tuning → oscillations or drift  
-- Always use common ground  
+- Ensure correct interrupt-capable pins for encoder inputs  
+- Incorrect CPR value will affect distance estimation  
+- Poor gain tuning may cause oscillations or drift  
+- Always ensure a common ground between all components  
 
 ---
 
-## 🔥 Future Improvements
+## Future Improvements
 
-- IMU integration  
+- IMU integration for improved heading estimation  
 - PID auto-tuning  
-- Path planning  
+- Path planning and waypoint tracking  
 - ROS2 integration  
 
 ---
 
-## 👤 Author
+## Author
 
-Swarup Laxmikant  
+Swarup Patil  
 Robotics | Control Systems | Embedded Systems  
 
 ---
 
-## 📜 License
+## License
 
 MIT License
